@@ -1,0 +1,137 @@
+#!/usr/bin/env python
+
+import rospy
+from sensor_msgs.msg import Joy
+from std_msgs.msg import Int16
+from bluepy.btle import Scanner, DefaultDelegate, Peripheral
+from struct import pack, unpack
+
+class MyDelegate(DefaultDelegate):
+    def __init__(self, controller):
+        DefaultDelegate.__init__(self)
+        self.controller = controller
+
+    def handleNotification(self, cHandle, data):
+        if cHandle == self.controller.battChar.getHandle():
+            #if not self.controller.battNotified:
+            self.controller.batt_pub.publish(ord(data))
+            #self.controller.battNotified = True
+        if cHandle == self.controller.orientationChar.getHandle():
+            #if not self.controller.orientationNotified:
+            (yaw,) = unpack("<h", data)
+            self.controller.orientation_pub.publish(yaw)
+            #self.controller.orientationNotified = True
+
+
+class BLEJoyController:
+    def __init__(self):
+        self.prev_fwd = 0
+        self.prev_turn = 0
+        self.prev_vert = 0
+        self.prev_side = 0
+        
+        self.fwd = 0
+        self.turn = 0
+        self.vert = 0
+        self.side = 0
+        
+        self.joy_sub = rospy.Subscriber("joy", Joy, self.joyCallback)
+        self.batt_pub = rospy.Publisher("batt", Int16, queue_size=1)
+        self.orientation_pub = rospy.Publisher("yaw", Int16, queue_size=1)
+        self.blimp = Peripheral("84:68:3e:03:eb:aa")
+        
+        self.battService = self.blimp.getServiceByUUID(0x180F)
+        self.battChar = self.battService.getCharacteristics(0x2A19)[0]
+
+        self.commandService = self.blimp.getServiceByUUID("301c9b20-a61b-408a-a8bf-5efcd95a3486")
+        self.commandChar = self.commandService.getCharacteristics("301c9b21-a61b-408a-a8bf-5efcd95a3486")[0]
+        
+        self.orientationService = self.blimp.getServiceByUUID("301c9b40-a61b-408a-a8bf-5efcd95a3486")
+        self.orientationChar = self.orientationService.getCharacteristics("301c9b41-a61b-408a-a8bf-5efcd95a3486")[0]
+        
+        print self.commandChar.getHandle(), 
+        print self.orientationChar.getHandle(), 
+        print self.battChar.getHandle()
+        
+#        self.orientationNotified = False
+#        self.battNotified = False
+        
+        self.blimp.setDelegate(MyDelegate(self))
+        self.enable_notify("301c9b41-a61b-408a-a8bf-5efcd95a3486")
+        self.enable_notify(0x2A19)
+
+    
+    def joyCallback(self, msg):
+        self.fwd = int(round(200*msg.axes[3]))
+        self.turn = int(round(200*msg.axes[2]))
+        self.vert = int(round(-200*msg.axes[1]))
+        self.side = int(round(-200*msg.axes[0]))
+        
+    def writeJoy(self):
+        if (self.fwd != self.prev_fwd) or (self.turn != self.prev_turn) or (self.vert != self.prev_vert) or (self.side != self.prev_side):
+            # Value changed, need to send new message to the blimp
+            cmd = pack(">hhhh", self.fwd, self.turn, self.vert, self.side)
+            self.commandChar.write(cmd)
+            self.prev_fwd = self.fwd
+            self.prev_turn = self.turn
+            self.prev_vert = self.vert
+            self.prev_side = self.side
+            
+    def enable_notify(self,  chara_uuid):
+        setup_data = b"\x01\x00"
+        notify = self.blimp.getCharacteristics(uuid=chara_uuid)[0]
+        print notify
+        notify_handle = notify.getHandle() + 1
+        print notify_handle
+        self.blimp.writeCharacteristic(notify_handle, setup_data, withResponse=False)
+
+            
+#    def checkAllNotified(self):
+#        if self.orientationNotified and self.battNotified:
+#            self.orientationNotified = False
+#            self.battNotified = False
+#            return True
+#        else:
+#            return False
+    
+    def readBLE(self):
+        battVal = self.battChar.read()
+        #print ord(battVal)
+        battLevel = ord(battVal)
+        self.batt_pub.publish(battLevel)
+        
+        orientationVal = self.orientationChar.read()
+        t1 = rospy.Time.now().to_time()
+        (yaw,) = unpack("<h", orientationVal)
+        t2 = rospy.Time.now().to_time()
+        rospy.loginfo("%.6f", t2-t1)
+        self.orientation_pub.publish(yaw)
+
+if __name__ == '__main__':
+    rospy.init_node('ble_joy_node')
+    
+    ble_joy = BLEJoyController()
+    
+    r = rospy.Rate(25)
+    while not rospy.is_shutdown():
+        if ble_joy.blimp.waitForNotifications(0.04):
+            rospy.loginfo("Receive something")
+        else:
+            rospy.loginfo("Waiting")
+        ble_joy.writeJoy()
+        #ble_joy.readBLE()
+        r.sleep()
+#    while not rospy.is_shutdown():
+#        while r.remaining() > rospy.Duration(0):
+#            if ble_joy.blimp.waitForNotifications(0.04):
+#                rospy.loginfo("Receive something")
+#            else:
+#                rospy.loginfo("Waiting")
+#            if ble_joy.checkAllNotified():
+#                rospy.loginfo("Got all")
+#                break
+#        rospy.loginfo("Run...")
+#        r.sleep()
+            
+    
+    ble_joy.blimp.disconnect()
