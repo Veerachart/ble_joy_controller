@@ -18,7 +18,10 @@ class MyDelegate(DefaultDelegate):
             #self.controller.battNotified = True
         if cHandle == self.controller.orientationChar.getHandle():
             #if not self.controller.orientationNotified:
+            #print ord(data)
+            #print len(data)
             (yaw,) = unpack("<h", data)
+            rospy.loginfo("%d",yaw)
             self.controller.orientation_pub.publish(yaw)
             #self.controller.orientationNotified = True
 
@@ -36,7 +39,7 @@ class BLEJoyController:
         self.side = 0
         
         self.joy_sub = rospy.Subscriber("joy", Joy, self.joyCallback)
-        #self.batt_pub = rospy.Publisher("batt", Int16, queue_size=1)
+        self.batt_pub = rospy.Publisher("batt", Int16, queue_size=1)
         self.orientation_pub = rospy.Publisher("yaw", Int16, queue_size=1)
         self.blimp = Peripheral("84:68:3e:03:eb:aa")
         
@@ -71,6 +74,7 @@ class BLEJoyController:
         if (self.fwd != self.prev_fwd) or (self.turn != self.prev_turn) or (self.vert != self.prev_vert) or (self.side != self.prev_side):
             # Value changed, need to send new message to the blimp
             cmd = pack(">hhhh", self.fwd, self.turn, self.vert, self.side)
+            print ":".join("{:02x}".format(ord(c)) for c in cmd)
             self.commandChar.write(cmd)
             self.prev_fwd = self.fwd
             self.prev_turn = self.turn
@@ -112,9 +116,10 @@ if __name__ == '__main__':
     
     ble_joy = BLEJoyController()
     
-    r = rospy.Rate(25)
+    r = rospy.Rate(50)
     while not rospy.is_shutdown():
-        if ble_joy.blimp.waitForNotifications(0.04):
+        #ble_joy.blimp.waitForNotifications(0.015)
+        if ble_joy.blimp.waitForNotifications(0.015):
             rospy.loginfo("Receive something")
         else:
             rospy.loginfo("Waiting")
